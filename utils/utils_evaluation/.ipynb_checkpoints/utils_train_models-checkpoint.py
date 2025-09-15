@@ -2,7 +2,7 @@ import sys
 import os
 from pathlib import Path
 
-name_model = 'pmVAE'
+name_model = 'VEGA'
 
 if name_model == 'VEGA' or name_model == 'VanillaVAE':
     sys.path.append('/home/BS94_SUR/phD/review/models reproductibility/VEGA/vega-reproducibility/src')
@@ -29,6 +29,11 @@ if name_model == 'OntoVAE':
     from cobra_ai.module.utils import *
     from cobra_ai.model.onto_vae import *
     import onto_vae
+    
+if name_model == 'ExpiMap':
+    sys.path.append('/home/BS94_SUR/phD/review/models reproductibility/Expimap/expiMap_reproducibility')
+    import scarches as sca
+    from scarches.utils import add_annotations
 
 
 import pandas as pd
@@ -138,7 +143,7 @@ class VAE_prepare_dataset:
         pathway_dict = read_gmt(pathway_file, min_g=0, max_g=1000)
         pathway_mask = create_pathway_mask(adata.var.index.tolist(), pathway_dict, add_missing=1, fully_connected=True)
 
-        return data, pathway_mask
+        return data, pathway_dict, pathway_mask
     
     def build_pmVAE_dataset(self, adata, pathway_file):
         adata.varm['annotations'] = load_annotations(
@@ -157,6 +162,24 @@ class VAE_prepare_dataset:
         adata = setup_anndata_ontovae(adata, ontobj)
         return adata
 
+    def build_ExpiMap_dataset(self, adata, pathway_file):
+        add_annotations(adata, pathway_file, min_genes=12)
+        print(adata.shape)
+        adata._inplace_subset_var(adata.varm['I'].sum(1)>0)
+        print(adata.shape)
+        sc.pp.normalize_total(adata)
+        sc.pp.log1p(adata)
+        #sc.pp.highly_variable_genes(
+         #   adata,
+          #  n_top_genes=2000,
+            #batch_key="batch",
+           # subset=True)
+        print(adata.shape)
+        select_terms = adata.varm['I'].sum(0)>12
+        adata.uns['terms'] = np.array(adata.uns['terms'])[select_terms].tolist()
+        adata.varm['I'] = adata.varm['I'][:, select_terms]
+        adata._inplace_subset_var(adata.varm['I'].sum(1)>0)
+        return adata
 
 
 
@@ -221,7 +244,7 @@ class Vega_train_multiple_times:
         dict_params = {'pathway_mask': pathway_mask, 'n_pathways':pathway_mask.shape[1], 'n_genes':pathway_mask.shape[0], 'device':dev, 'beta':beta, 'save_path':save_path,  'dropout':dropout, 'pos_dec':pos_dec}
 
         model = VEGA(**dict_params).to(dev)
-        hist = model.train_model(train_loader, lr, n_epochs, train_p, test_p, val_loader, save_model=False)
+        hist = model.train_model(train_loader, lr, n_epochs, train_p, test_p, val_loader, save_model=True)
 
         embedding_train = model.to_latent(torch.Tensor(adata_train.X).to(dev))
         np.savetxt(Path(path_to_save_embeddings + f'/vega_{name_dataset}_embeddings_train_{n}_trial.txt'), embedding_train.cpu().detach().numpy())
@@ -480,14 +503,113 @@ class OntoVAE_train_multiple_times:
     
 
 
+class ExpiMap_train_multiple_times:
+    def __init__(self,
+                 adata_train: AnnData,
+                 adata_test: AnnData,
+                 name_model: str,
+                 name_dataset: str,
+                 n:int,
+                 condition_key:str,
+                 conditions:str,
+                 hidden_layer_sizes:list,
+                 recon_loss:str,
+                 mask:str,
+                 early_stopping_kwargs:dict,
+                 n_epochs: int,
+                 alpha_epoch_anneal:int,
+                 alpha:int,
+                 omega:int,
+                 alpha_kl:int,
+                 weight_decay:float,
+                 use_early_stoppping:bool,
+                 use_stratify_sampling: bool,
+                 random_seed:int,
+                 path_to_save_embeddings: str,
+                 path_to_save_reconstructed: str,
+                 dev:str
+                        ) -> None:
+        super(ExpiMap_train_multiple_times, self).__init__()
+
+        self.adata_train = adata_train
+        self.adata_test = adata_test
+        self.name_model = name_model
+        self.name_dataset = name_dataset
+        self.n = n
+        self.condition_key = condition_key
+        self.conditions = conditions
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.recon_loss = recon_loss
+        self.mask = mask
+        self.early_stopping_kwargs = early_stopping_kwargs
+        self.n_epochs = n_epochs
+        self.alpha_epoch_anneal = alpha_epoch_anneal
+        self.alpha = alpha
+        self.omega = omega
+        self.alpha_kl = alpha_kl
+        self.weight_decay = weight_decay
+        self.use_early_stopping = use_early_stoppping
+        self.use_stratify_sampling = use_stratify_sampling
+        self.random_seed = random_seed
+        self.path_to_save_embeddings = path_to_save_embeddings
+        self.path_to_save_reconstructed = path_to_save_reconstructed
+        self.dev = dev
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def train_ExpiMap(self, name_model, name_dataset, n, adata_train, adata_test, condition_key, conditions, hidden_layer_sizes, recon_loss, mask, n_epochs, alpha_epoch_anneal, alpha, omega, alpha_kl, weight_decay,
+        early_stopping_kwargs, use_early_stopping, use_stratified_sampling, path_to_save_embeddings, path_to_save_reconstructed, dev, random_seed):
+        
+        model_expimap = sca.models.EXPIMAP(
+            adata=adata_train,
+            condition_key=condition_key,
+            conditions=conditions,
+            hidden_layer_sizes=hidden_layer_sizes,
+            #use_mmd=False,
+            recon_loss=recon_loss,
+            mask=adata_train.varm['I'].T,
+            #use_decoder_relu=False,
+            #mmd_instead_kl=False
+        )
+        # train the model
+        model_expimap.train(n_epochs=n_epochs, 
+            alpha_epoch_anneal=alpha_epoch_anneal, 
+            alpha=alpha, 
+            omega=omega,
+            alpha_kl=alpha_kl,
+            weight_decay=weight_decay, 
+            early_stopping_kwargs=early_stopping_kwargs,
+            use_early_stopping=use_early_stopping,
+            use_stratified_sampling=use_stratified_sampling,
+            seed=random_seed) 
+        
+        mu_train = model_expimap.model.encoder(torch.Tensor(adata_train.X).to(dev))[0]
+        logvar_test = model_expimap.model.encoder(torch.Tensor(adata_train.X).to(dev))[1]
+        embedding_train = reparameterize(mu_train, logvar_train)
+        np.savetxt(Path(path_to_save_embeddings + f'/ExpiMap_{name_dataset}_embeddings_train_{n}_trial.txt'), embedding_train)
+
+        X_reconstructed_train = model_expimap.model.decoder(embedding_train.to(dev))[0].cpu().detach()
+        np.savetxt(Path(path_to_save_reconstructed + f'/ExpiMap_{name_dataset}_reconstruction_train_{n}_trial.txt'), X_reconstructed_train)
+
+        mu_test = model_expimap.model.encoder(torch.Tensor(adata_test.X).to(dev))[0]
+        logvar_test = model_expimap.model.encoder(torch.Tensor(adata_test.X).to(dev))[1]
+        embedding_test = reparameterize(mu_test, logvar_test)
+        np.savetxt(Path(path_to_save_embeddings + f'/ExpiMap_{name_dataset}_embeddings_test_{n}_trial.txt'), embedding_test)
+        X_reconstructed_test = model_expimap.model.decoder(embedding_test.to(dev))[0].cpu().detach()
+        np.savetxt(Path(path_to_save_reconstructed + f'/ExpiMap_{name_dataset}_reconstruction_test_{n}_trial.txt'), X_reconstructed_test)
+
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()    
+    
+
+
             
 
 
 
-            
-
-
-
 
 
             
@@ -502,6 +624,8 @@ class OntoVAE_train_multiple_times:
 
 
             
+
+
 
 
 
