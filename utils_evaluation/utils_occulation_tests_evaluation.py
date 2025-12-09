@@ -35,16 +35,20 @@ def overall_reduction_zscore(nb_cells, vector_activation_score_1, vector_activat
 
 
 def proba_impact_pathway_perturbation(df_scores, overlap_matrix, pathway_observed, pathway_compared, name_reduction_metric, name_activation_column, name_overlap_compared_pathway, name_overlap_column, activ_threshold, overlap_threshold):
+    
+    if df_scores.empty or overlap_matrix.empty:
+        return None
     overlap_score = overlap_matrix[(overlap_matrix['Pathway Selected'] == pathway_observed) & (overlap_matrix[name_overlap_compared_pathway] == pathway_compared)][name_overlap_column].values[0]
     #print(overlap_score)
     if overlap_score >= overlap_threshold:
-        print(overlap_score)
+        #print(overlap_score)
         return None
     
     df_selected = df_scores[
         (df_scores['pathway perturbated'] == pathway_observed) & 
         (df_scores['pathway observed'] == pathway_compared)
     ]
+    
     
     df_selected = df_selected[abs(df_selected[name_activation_column]) > activ_threshold]
     
@@ -56,8 +60,12 @@ def proba_impact_pathway_perturbation(df_scores, overlap_matrix, pathway_observe
         (df_scores['pathway perturbated'] == pathway_observed)
     ][name_reduction_metric].values[0]
     
+    
     count_pathway_p_over_pathway_q = (observed_value > df_selected[name_reduction_metric]).sum()
     count_threshold_requirements = len(df_selected)
+    
+    del df_selected
+    gc.collect()
     
     proba = count_pathway_p_over_pathway_q / count_threshold_requirements
     
@@ -80,10 +88,16 @@ def overall_proba_impact_pathway_perturbation(
     """
     Compute probabilities for all comparisons of one pathway in parallel.
     """
-
+    
+    df_scores_slices = {
+        pathway: df_scores[df_scores['pathway perturbated'] == pathway]
+        for pathway in list_pathways
+    }
+    
     def run_one(pathway_compared):
+        df_scores_subset = df_scores_slices[pathway_observed]
         proba = proba_impact_pathway_perturbation(
-            df_scores=df_scores,
+            df_scores=df_scores_subset,
             overlap_matrix=overlap_matrix,
             pathway_observed=pathway_observed,
             pathway_compared=pathway_compared,
@@ -106,13 +120,16 @@ def overall_proba_impact_pathway_perturbation(
     # Parallel execution over all pathway comparisons
     results = Parallel(n_jobs=n_cpus)(
         delayed(run_one)(pathway_compared) for pathway_compared in tqdm(
-            list_pathways, desc=f"Comparison {pathway_observed} vs {pathway_compared}", ncols=100
+            list_pathways, desc=f"Comparison {pathway_observed}", ncols=100
         )
     )
 
     # Collect results
     probas_for_pathway = [p for p, r in results if p is not None]
     records = [r for p, r in results if r is not None]
+    
+    del results
+    gc.collect()
 
     if len(probas_for_pathway) == 0:
         return None, records
@@ -126,6 +143,8 @@ def compute_metrics_for_pathway(
     list_pathways,
     path_to_save_reduction_scores,
     overlap_matrix,
+    df_genespathways,
+    model_name,
     name_activation_column,
     name_overlap_compared_pathway,
     name_overlap_column,
@@ -137,8 +156,18 @@ def compute_metrics_for_pathway(
     Compute all three reduction metrics for one pathway_perturbated.
     """
     # Load scores
+    nb_of_genes = df_genespathways[df_genespathways['pathway'] == pathway_perturbated]['number of genes'].values[0]
+    if nb_of_genes == 0:
+        #print(f"Skipping {pathway_perturbated} because it has 0 genes.")
+        return pathway_perturbated, {}, []  # return empty results
+    
+    path_to_save_reduction_scores = path_to_save_reduction_scores + f'{nb_of_genes} genes/'
+    
+    if model_name == 'OntoVAE':
+        pathway_perturbated = safe_filename(pathway_perturbated)
+        
     df_scores = pd.read_parquet(
-        os.path.join(path_to_save_reduction_scores, f'vega_reduction_scores_{pathway_perturbated}_perturbation.parquet')
+        os.path.join(path_to_save_reduction_scores, f'{model_name}_reduction_scores_{pathway_perturbated}_perturbation.parquet')
     )
     df_scores["std_activation"] = df_scores.groupby("pathway observed")["original neuron activation"].transform("std")
     df_scores["reduction z-score"] = df_scores['abs difference perturbation'] / df_scores["std_activation"]
@@ -150,7 +179,7 @@ def compute_metrics_for_pathway(
     for name_reduction_metric in ['abs difference perturbation', 'reduction_score', 'reduction z-score']:
         proba, records = overall_proba_impact_pathway_perturbation(
             pathway_observed=pathway_perturbated,
-            list_pathways=list_pathways[:-1], 
+            list_pathways=list_pathways,
             df_scores=df_scores,
             overlap_matrix=overlap_matrix,
             name_reduction_metric=name_reduction_metric,
@@ -159,8 +188,10 @@ def compute_metrics_for_pathway(
             name_overlap_column=name_overlap_column,
             activ_threshold=activ_threshold,
             overlap_threshold=overlap_threshold,
-            n_cpus=n_cpus 
+            n_cpus=n_cpus # you can adjust
         )
+        
+        
         results['activation_threshold'] = activ_threshold
         results['overlap_threshold'] = overlap_threshold
         # Save metric results
@@ -173,6 +204,12 @@ def compute_metrics_for_pathway(
         
 
         all_records.extend(records)
+        
+        del records
+        del proba
+        gc.collect()
+    df_scores = None
+    gc.collect()
 
     return pathway_perturbated, results, all_records
 
@@ -182,6 +219,8 @@ def compute_all_pathways_parallel(
     list_pathways_compared,
     path_to_save_reduction_scores,
     overlap_matrix,
+    df_genespathways,
+    model_name,
     name_activation_column,
     name_overlap_compared_pathway,
     name_overlap_column,
@@ -199,6 +238,8 @@ def compute_all_pathways_parallel(
             list_pathways_compared,
             path_to_save_reduction_scores,
             overlap_matrix,
+            df_genespathways,
+            model_name,
             name_activation_column,
             name_overlap_compared_pathway,
             name_overlap_column,
@@ -213,6 +254,10 @@ def compute_all_pathways_parallel(
     for pathway_perturbated, metrics, records in results:
         pathway_probs.append({'Pathway Perturbated': pathway_perturbated, **metrics})
         all_records.extend(records)
+    
+    del records
+    del results
+    gc.collect()
 
     # Convert to DataFrame
     df_probas = pd.DataFrame(pathway_probs)
