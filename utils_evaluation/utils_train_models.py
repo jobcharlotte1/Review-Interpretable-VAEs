@@ -5,7 +5,7 @@ from pathlib import Path
 name_model = 'VEGA'
 
 if name_model == 'VEGA' or name_model == 'VanillaVAE':
-    sys.path.append('/home/BS94_SUR/phD/review/models reproductibility/VEGA/vega-reproducibility/src')
+    sys.path.append('/home/user/Review-Interpretable-VAEs/Review-Interpretable-VAEs/cloned_github_models/vega/vega-reproducibility/src')
     import vanilla_vae
     import vega
     import train_vanilla_vae_suppFig1
@@ -53,7 +53,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px  # For color palette
 from sklearn.model_selection import train_test_split
-import umap
+#import umap
 from scipy.sparse import issparse
 #import optuna
 #from optuna.samplers import TPESampler
