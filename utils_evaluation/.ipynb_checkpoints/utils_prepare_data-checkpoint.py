@@ -27,6 +27,7 @@ from scipy.sparse import issparse
 from pathlib import Path
 import anndata as ad
 from anndata import AnnData
+import argparse
 
 if name_model == 'VEGA' or name_model == 'VanillaVAE':
     sys.path.append('/home/BS94_SUR/phD/review/models reproductibility/VEGA/vega-reproducibility/src')
@@ -145,3 +146,84 @@ class VAE_prepare_dataset:
         adata = adata.copy()
         adata = setup_anndata_ontovae(adata, ontobj)
         return adata
+
+    
+    
+    
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Prepare VAE dataset")
+
+    # Required arguments
+    parser.add_argument("adata_file", help="Path to AnnData (.h5ad) file")
+    parser.add_argument("column_labels_name", help="Column in adata.obs to use as labels")
+    parser.add_argument("name_model", help="Name of the model: Vega, pmVAE, OntoVAE, etc.")
+    parser.add_argument("pathway_file", help="Path to pathway file")
+
+    # Optional arguments
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--train_size", type=float, default=0.9, help="Fraction of training data")
+    parser.add_argument("--preprocess", action="store_true", help="Preprocess data")
+    parser.add_argument("--select_hvg", action="store_true", help="Select highly variable genes")
+    parser.add_argument("--n_top_genes", type=int, default=2000, help="Number of top HVGs")
+
+    args = parser.parse_args()
+
+    # Load AnnData
+    adata = sc.read_h5ad(args.adata_file)
+
+    # Initialize class
+    prep_data = VAE_prepare_dataset(
+        adata=adata,
+        column_labels_name=args.column_labels_name,
+        random_seed=args.random_seed,
+        name_model=args.name_model,
+        train_size=args.train_size,
+        pathway_file=args.pathway_file,
+        preprocess=args.preprocess,
+        select_hvg=args.select_hvg,
+        n_top_genes=args.n_top_genes
+    )
+
+    # Preprocess data
+    adata = prep_data.preprocess_data(
+        adata,
+        name_model=args.name_model,
+        preprocess=args.preprocess,
+        select_hvg=args.select_hvg,
+        n_top_genes=args.n_top_genes
+    )
+
+    # Extract X and y
+    X, y = prep_data.extract_x_y_from_adata(adata, args.column_labels_name)
+
+    # Split into train/test
+    X_train, X_test, labels_train, labels_test = prep_data.split_data(
+        X, y, args.train_size, args.random_seed
+    )
+
+    # Encode labels
+    y_train = prep_data.encode_y(labels_train)
+    y_test = prep_data.encode_y(labels_test)
+
+    # Extract indices
+    index_train = prep_data.extract_index(X_train)
+    index_test = prep_data.extract_index(X_test)
+
+    # Build AnnData objects
+    adata_train, index_train = prep_data.build_adata_from_X(adata, index_train)
+    adata_test, index_test = prep_data.build_adata_from_X(adata, index_test)
+
+    # Further split train into train/val
+    X_train, X_val, labels_train, labels_val = prep_data.split_data(
+        X_train, labels_train, args.train_size, args.random_seed
+    )
+    y_val = prep_data.encode_y(labels_val)
+    index_val = prep_data.extract_index(X_val)
+    adata_val, index_val = prep_data.build_adata_from_X(adata, index_val)
+    
+    train_data, pathway_mask_train = prep_data.build_vega_dataset(adata_train, y_train, args.pathway_file)
+    val_data, pathway_mask_val = prep_data.build_vega_dataset(adata_val, y_val, args.pathway_file)
+    test_data, pathway_mask_test = prep_data.build_vega_dataset(adata_test, y_test, args.pathway_file)
+
+
+    print("Train, validation, and test datasets prepared successfully!")

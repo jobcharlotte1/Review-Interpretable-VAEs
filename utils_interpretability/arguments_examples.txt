@@ -1,0 +1,16 @@
+data_path = '/home/BS94_SUR/phD/review/models reproductibility/pmvae/scripts/data/kang_count.h5ad'
+pathway_file = '/home/BS94_SUR/phD/review/models reproductibility/VEGA/vega-reproducibility/data/reactomes.gmt'
+
+path_saved_embeddings_pathway = '/home/BS94_SUR/phD/review/notebooks/review VAEs/perturbation/vega/model inference/inhibition/one vs all/embeddings/'
+path_saved_embeddings_original = '/home/BS94_SUR/phD/review/notebooks/review VAEs/perturbation/vega/model inference/original/embeddings/'
+
+args = {
+    'split': 'train',
+    'perturbation': 'inhibition',
+    'name_moddel': 'vega',
+    'name_dataset': 'kang',
+    'random_seed': 42   
+}
+
+path_embeddings_original = path_saved_embeddings_original + f'{name_model}_{name_dataset}_embeddings_{split}_original_seed_{random_seed}_trial.txt'
+path_embeddings_pathway_perturbated = path_saved_embeddings_pathway + f'{model}_{name_dataset}_embeddings_{split}_{pathway_selected}_{perturbation}_seed_{random_seed}.txt'
